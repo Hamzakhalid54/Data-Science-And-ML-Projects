@@ -1,0 +1,82 @@
+library(ggplot2)
+library(caret)
+library("ROCR")
+data <- read.csv("C:/Users/Hamza Khalid/Desktop/Project R/wisconsin.csv")
+ggplot(data, aes(x = Cl.thickness, y = Cell.size, color = Class)) +
+  geom_point() +
+  ggtitle("Scatter Plot of Cl.thickness vs. Cell.size")
+
+summary(data)
+
+
+# Impute missing values with mean
+impute_missing_with_mean <- function(data) {
+  numeric_vars <- data[, sapply(data, is.numeric)]
+  for (col in names(numeric_vars)) {
+    col_mean <- mean(numeric_vars[, col], na.rm = TRUE)
+    data[, col][is.na(data[, col])] <- col_mean
+  }
+  return(data)
+}
+data <- impute_missing_with_mean(data)
+
+numeric_vars <- data[, sapply(data, is.numeric)] 
+par(mfrow = c(2, 4))
+for (i in seq_along(numeric_vars)) {
+  boxplot(numeric_vars[, i], main = names(numeric_vars)[i], col = "skyblue", border = "black", notch = TRUE)
+}
+library(caret)
+model <- train(Class ~ ., data = data, method = "glm", family = "binomial")
+print(model)
+
+library(ROCR)
+
+
+predictions_raw <- as.numeric(predict(model, newdata = data, type = "raw"))
+predictions_rocr <- prediction(predictions_raw, data$Class)
+perf <- performance(predictions_rocr, "tpr", "fpr")
+
+
+roc_plot <- plot(perf, col = "blue", main = "ROC Curve", lwd = 2)
+abline(a = 0, b = 1, lty = 2, col = "red")
+
+
+pdf("ROC_Curve.pdf", width = 10, height = 8)
+print(roc_plot)
+dev.off()
+
+## now predicting its class by giving new test data 
+test_data <- data.frame(
+  Cl.thickness = c(3, 6, 1),
+  Cell.size = c(1, 8, 1),
+  Cell.shape = c(1, 8, 1),
+  Marg.adhesion = c(1, 1, 1),
+  Epith.c.size = c(2, 3, 2),
+  Bare.nuclei = c(2, 4, 1),
+  Bl.cromatin = c(3, 3, 3),
+  Normal.nucleoli = c(1, 7, 1),
+  Mitoses = c(1, 1, 1)
+)
+# Assuming 'model' is your trained logistic regression model
+# and 'test_data' is your new data for prediction
+# Make predictions on the test data
+
+predictions_raw_test <- as.numeric(predict(model, newdata = test_data, type = "raw"))
+predictions_class_test <- ifelse(predictions_raw_test > 0.5, "malignant", "benign")
+
+print(predictions_raw_test)
+
+data$Response <- ifelse(data$Class == "malignant", 0, 1)
+plot_data <- data.frame(Response = as.factor(data$Response),
+                        predicted_prob = predict(model, newdata = data, type = "raw")
+)
+boundary_plot <- ggplot(plot_data, aes(x = predicted_prob, fill = Response)) +
+  geom_bar(binwidth = 0.05, position = "identity", alpha = 0.5) +
+  scale_fill_manual(values = c("0" = "red", "1" = "blue")) +
+  geom_vline(xintercept = 0.5, linetype = "dashed", color = "black") +
+  labs(title = "Decision Boundary of Logistic Regression",
+       x = "Predicted Probabilities",
+       y = "Count") +
+  theme_minimal()
+ggsave("Decision_Boundary_Plot2.pdf", boundary_plot, width = 8, height = 6)
+
