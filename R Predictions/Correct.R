@@ -1,0 +1,376 @@
+
+library(quarks)         #DAX30 Index data is a part of this library
+library(dplyr)
+library(caret)
+library(randomForest)
+library(xgboost)
+library(glmnet)
+library(ggplot2)
+library(e1071)
+library(xts)
+library(data.table)  # For data manipulation
+library(PortfolioAnalytics)  # For portfolio optimization
+
+head(DAX)
+DAX_temp <- DAX
+
+head(DAX_temp)
+
+DAX <- DAX %>%
+  select(-ref.date, -ticker, -price.adjusted, -ret.adjusted.prices)
+
+DAX <- na.omit(DAX)
+
+# Split data into training and testing sets
+set.seed(123)
+trainIndex <- createDataPartition(DAX$ret.closing.prices, p = 0.7, list = FALSE, times = 1)
+train_data <- DAX[trainIndex, ]
+test_data <- DAX[-trainIndex, ]
+
+
+
+# Define predictor and response variables
+predictors <- names(DAX)[-which(names(DAX) == "ret.closing.prices")]
+response <- "ret.closing.prices"
+
+## ********************* TRAINING MACHINE LEARNING MODELS **********************
+
+
+# XGBoost
+xgb_model <- xgboost(data = as.matrix(train_data[, predictors]), 
+                     label = train_data[, response], 
+                     nrounds = 100, 
+                     objective = "reg:squarederror")
+
+# Random Forest
+rf_model <- randomForest(x = train_data[, predictors], 
+                         y = train_data[, response], 
+                         ntree = 500)
+
+# LASSO Regression
+lasso_model <- cv.glmnet(x = as.matrix(train_data[, predictors]), 
+                         y = train_data[, response], 
+                         alpha = 1)
+
+# Ridge Regression
+ridge_model <- cv.glmnet(x = as.matrix(train_data[, predictors]), 
+                         y = train_data[, response], 
+                         alpha = 0)
+
+# Elastic Net Regression
+elastic_net_model <- cv.glmnet(x = as.matrix(train_data[, predictors]), 
+                               y = train_data[, response], 
+                               alpha = 0.5)
+
+# Support Vector Machine (SVM)
+svm_model <- svm(x = train_data[, predictors], 
+                 y = train_data[, response], 
+                 kernel = "radial")
+
+# Predictions
+xgb_pred <- predict(xgb_model, as.matrix(test_data[, predictors]))
+rf_pred <- predict(rf_model, test_data[, predictors])
+lasso_pred <- predict(lasso_model, newx = as.matrix(test_data[, predictors]))
+ridge_pred <- predict(ridge_model, newx = as.matrix(test_data[, predictors]))
+elastic_net_pred <- predict(elastic_net_model, newx = as.matrix(test_data[, predictors]))
+svm_pred <- predict(svm_model, test_data[, predictors])
+
+
+# Function to calculate evaluation metrics
+evaluate_model <- function(actual, predicted) {
+  # Function to calculate MAPE
+  MAPE <- function(actual, predicted) {
+    mean(abs((actual - predicted) / actual)) * 100
+  }
+  
+  # Function to calculate RMSE
+  RMSE <- function(actual, predicted) {
+    sqrt(mean((actual - predicted)^2))
+  }
+  
+  # Function to calculate MAE
+  MAE <- function(actual, predicted) {
+    mean(abs(actual - predicted))
+  }
+  
+  # Calculate metrics
+  rmse <- RMSE(actual, predicted)
+  mae <- MAE(actual, predicted)
+  mape <- MAPE(actual, predicted)
+  
+  # Return metrics
+  return(data.frame(RMSE = round(rmse, 3), MAE = round(mae, 3), MAPE = round(mape, 3)))
+}
+
+rbind(
+  cbind("Model" = "XGBoost", evaluate_model(test_data[, response], xgb_pred)),
+  cbind("Model" = "Random Forest", evaluate_model(test_data[, response], rf_pred)),
+  cbind("Model" = "Lasso Model", evaluate_model(test_data[, response], lasso_pred)),
+  cbind("Model" = "Ridge Model", evaluate_model(test_data[, response], ridge_pred)),
+  cbind("Model" = "ElasticNet Model", evaluate_model(test_data[, response], elastic_net_pred)),
+  cbind("Model" = "SVM Model", evaluate_model(test_data[, response], svm_pred)))
+
+## *********************** PORTFOLIO CREATION **************************
+
+
+# Load required libraries
+library(PortfolioAnalytics)
+
+# Assuming you've selected the Lasso Model as the best-performing model
+best_model <- lasso_model
+
+# Predict returns for the entire DAX30 index using the Lasso Model
+predicted_returns <- predict(best_model, newx = as.matrix(DAX_temp[, predictors]))
+
+# Ensure that predicted_returns is numeric
+predicted_returns <- as.numeric(predicted_returns)
+
+# Combine the predicted returns with the stock ticker symbols
+predicted_returns_df <- data.frame(ticker = DAX_temp$ticker, predicted_returns)
+
+# Calculate the covariance matrix of returns
+covariance_matrix <- cov(matrix(predicted_returns, ncol = 1))
+
+# Simulation Part - Replace this with your actual data and model predictions
+set.seed(123) # For reproducibility
+predicted_returns <- rnorm(30, mean = 0.0005, sd = 0.01) # Simulated predicted returns for 30 assets
+
+# Simulating historical daily returns for 30 components over 250 days
+simulated_historical_returns <- matrix(rnorm(30 * 250, mean = 0.0005, sd = 0.01), ncol = 30, nrow = 250)
+covariance_matrix <- cov(simulated_historical_returns) # Covariance matrix of the simulated returns
+
+# Number of stocks in the portfolio
+num_stocks <- nrow(predicted_returns_df)
+
+# Load required libraries
+library(PortfolioAnalytics) # For portfolio specification - not directly used in the optimization here
+library(ROI)
+library(ROI.plugin.quadprog)
+
+library(quadprog)
+
+# Simulation Part - Replace this with your actual data and model predictions
+set.seed(123) # For reproducibility
+predicted_returns <- rnorm(30, mean = 0.0005, sd = 0.01) # Simulated predicted returns for 30 assets
+
+# Simulating historical daily returns for 30 components over 250 days
+simulated_historical_returns <- matrix(rnorm(30 * 250, mean = 0.0005, sd = 0.01), ncol = 30, nrow = 250)
+simulated_covariance_matrix <- cov(simulated_historical_returns) # Covariance matrix of the simulated returns
+
+# Define the function for portfolio optimization
+optimizePortfolio <- function(predicted_returns, covariance_matrix, target_return) {
+  n_assets <- length(predicted_returns)
+  
+  # Print the input data for diagnostic purposes
+  cat("Number of assets:", n_assets, "\n")
+  cat("Predicted returns:", predicted_returns, "\n")
+  cat("Covariance matrix:\n")
+  print(covariance_matrix)
+  
+  # Define Dmat, dvec, Amat, bvec for quadprog
+  Dmat <- covariance_matrix
+  dvec <- rep(0, n_assets)
+  Amat <- cbind(rep(1, n_assets), diag(n_assets))
+  bvec <- c(1, rep(0, n_assets))
+  
+  # Solve quadratic programming problem
+  optimal_solution <- tryCatch(
+    {
+      solve.QP(Dmat, dvec, Amat, bvec, meq = 1)
+    },
+    error = function(e) {
+      cat("Error occurred during optimization:\n")
+      message(e)
+      return(NULL)
+    }
+  )
+  
+  # Check if solution is NULL or if any key components are missing
+  if (is.null(optimal_solution)) {
+    stop("Optimization failed: No solution returned.")
+  }
+  
+  # Check if the solution object has all required components
+  if (!all(names(optimal_solution) %in% c("solution", "unconstrained.solution", "iterations", "Lagrangian", "iact"))) {
+    cat("Completeted\n")
+  }
+  
+  cat("Optimization Successful.\n")
+  return(optimal_solution$solution)
+}
+
+target_return <- mean(predicted_returns)
+
+# Assuming `target_return` has already been defined
+optimal_weights <- optimizePortfolio(predicted_returns, simulated_covariance_matrix, target_return)
+
+# Print optimal weights
+if (!is.null(optimal_weights)) {
+  cat("Optimal Weights:\n")
+  print(optimal_weights)
+} else {
+  cat("Optimization failed.\n")
+}
+
+
+
+## *********************** Visualization **************************
+
+str(DAX_temp)
+
+
+# Load required libraries
+library(quarks)         # DAX30 Index data is a part of this library
+library(dplyr)
+library(ggplot2)
+
+# Load DAX30 data
+data("DAX")
+
+# Make a copy of DAX dataframe
+DAX_temp <- DAX
+
+# Plotting historical stock prices
+ggplot(DAX_temp, aes(x = ref.date, y = price.close, color = ticker)) +
+  geom_line() +
+  labs(title = "Historical Stock Prices of DAX30 Stocks", x = "Date", y = "Closing Price", color = "Stock Ticker") +
+  theme_minimal()
+
+
+
+
+
+
+
+
+
+# Create a data frame with actual and predicted values for Ridge regression
+lasso_results <- data.frame(Actual = test_data[, response], Predicted = lasso_pred)
+# Create the performance plot
+lasso_performance_plot <- ggplot(lasso_results, aes(x = Actual, y = lasso_pred)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "blue") +  # Add a dashed line representing perfect prediction
+  labs(title = "LASSO Regression: Predicted vs Actual", x = "Actual", y = "Predicted") +
+  theme_minimal()
+
+# Print the plot
+print(lasso_performance_plot)
+
+
+
+
+
+
+# Create a data frame with actual and predicted values for Ridge regression
+ridge_results <- data.frame(Actual = test_data[, response], Predicted = ridge_pred)
+
+# Create the performance plot for Ridge regression
+ridge_performance_plot <- ggplot(ridge_results, aes(x = Actual, y = ridge_pred)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "blue") +  # Add a dashed line representing perfect prediction
+  labs(title = "Ridge Regression: Predicted vs Actual", x = "Actual", y = "Predicted") +
+  theme_minimal()
+
+# Print the plot
+print(ridge_performance_plot)
+
+
+
+
+
+
+# Create a data frame with actual and predicted values for Random Forest
+rf_results <- data.frame(Actual = test_data[, response], Predicted = rf_pred)
+
+# Create the performance plot for Random Forest
+rf_performance_plot <- ggplot(rf_results, aes(x = Actual, y = Predicted)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "blue") +  # Add a dashed line representing perfect prediction
+  labs(title = "Random Forest: Predicted vs Actual", x = "Actual", y = "Predicted") +
+  theme_minimal()
+
+# Print the plot
+print(rf_performance_plot)
+
+
+
+
+
+
+
+# Create a data frame with actual and predicted values for Elastic Net
+elastic_net_results <- data.frame(Actual = test_data[, response], Predicted = elastic_net_pred)
+
+# Create the performance plot for Elastic Net
+elastic_net_performance_plot <- ggplot(elastic_net_results, aes(x = Actual, y = elastic_net_pred)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "blue") +  # Add a dashed line representing perfect prediction
+  labs(title = "Elastic Net: Predicted vs Actual", x = "Actual", y = "Predicted") +
+  theme_minimal()
+
+# Print the plot
+print(elastic_net_performance_plot)
+
+
+
+
+
+
+
+# Create a data frame with actual and predicted values for SVM
+svm_results <- data.frame(Actual = test_data[, response], Predicted = svm_pred)
+
+# Create the performance plot for SVM
+svm_performance_plot <- ggplot(svm_results, aes(x = Actual, y = Predicted)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "blue") +  # Add a dashed line representing perfect prediction
+  labs(title = "SVM: Predicted vs Actual", x = "Actual", y = "Predicted") +
+  theme_minimal()
+
+# Print the plot
+print(svm_performance_plot)
+
+
+
+
+
+
+
+
+# Create a data frame with actual and predicted values for XGBoost
+xgb_results <- data.frame(Actual = test_data[, response], Predicted = xgb_pred)
+
+# Create the performance plot for XGBoost
+xgb_performance_plot <- ggplot(xgb_results, aes(x = Actual, y = Predicted)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "blue") +  # Add a dashed line representing perfect prediction
+  labs(title = "XGBoost: Predicted vs Actual", x = "Actual", y = "Predicted") +
+  theme_minimal()
+
+# Print the plot
+print(xgb_performance_plot)
+
+
+
+library(ggplot2)
+library(dplyr)
+
+# Assuming 'predicted_returns_df' and 'DAX_temp' are already defined and have the necessary data
+# Filter predicted returns to include only assets in the DAX30 index
+predicted_returns_filtered <- predicted_returns_df %>%
+  filter(ticker %in% DAX_temp$ticker) %>%
+  arrange(desc(predicted_returns)) # Sort by descending predicted returns for a more informative plot
+
+# Update the ggplot code
+predicted_returns_plot <- ggplot(predicted_returns_filtered, aes(x = reorder(ticker, predicted_returns), y = predicted_returns, fill = predicted_returns)) +
+  geom_bar(stat = "identity") +
+  scale_fill_gradient2(low = "red", mid = "white", high = "green", midpoint = 0) +
+  labs(title = "Predicted Returns for Investment Portfolio",
+       x = "Asset",
+       y = "Predicted Returns") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) # Rotate the x labels for readability
+
+# Print the plot
+print(predicted_returns_plot)
+
